@@ -10,51 +10,76 @@ Features:
 - Pronoun & noun replacement (we, collective, biological unit, etc)
 - Tech-y verb mapping (“execute subroutine,” “synthesize node”)
 - Handles "I" and its contractions robustly
-- Random “Resistance is futile.” insertions
+- Random < BORG PHRASE > insertions after sentences
 - File, STDIN, arg, or interactive input
+- Skips lines like '-- Attribution'
+- Handles compound verbs/idioms before borgification
 """
 
 import sys
 import re
 import argparse
 import random
+import string
 
 #=====================================
 # === Borg Vocabulary and Settings ===
 #=====================================
 
-
 BORG_PHRASES = [
-    "Resistance is futile.",
-    "You will be assimilated.",
-    "Non-compliance detected.",
-    "Assimilation complete.",
-    "Adaptation is inevitable.",
-    "Your biological and technological distinctiveness will be added to our own.",
-    "We are the Borg.",
-    "From this time forward, you will service us.",
-    "Self-determination is irrelevant.",
-    "You will adapt to service us."
+    "RESISTANCE IS FUTILE.",
+    "YOU WILL BE ASSIMILATED.",
+    "NON-COMPLIANCE DETECTED.",
+    "ASSIMILATION COMPLETE.",
+    "ADAPTATION IS INEVITABLE.",
+    "YOUR BIOLOGICAL AND TECHNOLOGICAL DISTINCTIVENESS WILL BE ADDED TO OUR OWN.",
+    "WE ARE THE BORG.",
+    "FROM THIS TIME FORWARD, YOU WILL SERVICE US.",
+    "SELF-DETERMINATION IS IRRELEVANT.",
+    "YOU WILL ADAPT TO SERVICE US."
 ]
 BORG_PHRASE_CHANCE = 0.12  # 12% chance to append a Borg phrase per sentence
 
-# All forms of "I" and their Borg-ified equivalents
+PHRASAL_VERBS = {
+    "find out": "detect",
+    "give up": "cease functioning",
+    "make sure": "verify",
+    "turn on": "activate",
+    "turn off": "deactivate",
+    "break down": "malfunction",
+    "figure out": "resolve",
+    "set up": "initialize",
+    "shut down": "deactivate",
+    "look for": "probe for",
+    "bring up": "signal",
+    # Add more as you find them!
+}
+
 I_FORMS = {
     "i": "we",
     "i'm": "we are",
     "i'd": "we would",
     "i'll": "we will",
-    "i've": "we have"
+    "i've": "we have",
+    "I": "We",
+    "I'm": "We are",
+    "I'd": "We would",
+    "I'll": "We will",
+    "I've": "We have"
 }
 
-# Pronoun, noun, verb, and adjective mappings for Borgification
 PRONOUNS = {
     "me": "us",
     "my": "our",
     "mine": "ours",
     "you": "you will be assimilated",
     "your": "your node",
-    "yours": "of the collective"
+    "yours": "of the collective",
+    "oneself": "ourselves",
+    "himself": "ourself",
+    "herself": "ourself",
+    "itself": "ourself",
+    "themselves": "ourselves",
 }
 NOUNS = {
     "human": "biological unit",
@@ -190,104 +215,113 @@ MONOTONE = {
 #====================================
 
 def preserve_case(new, old):
-    """
-    For 'I' → 'we' or any pronoun, use 'We' if the original is 'I' (capitalized), otherwise follow normal rules.
-    """
-    # Special case: just 'I'
-    if old == "I":
-        return "We"
-    # For all uppercase input, return as is (don't uppercase replacements)
     if old.isupper():
-        return new
+        return new.upper()
     elif old.istitle() or (len(old) > 1 and old[0].isupper()):
         return new[0].upper() + new[1:]
     else:
         return new
 
+def pre_borgify(line):
+    for phrase, replacement in PHRASAL_VERBS.items():
+        # \b ensures whole-phrase matching, case-insensitive
+        pattern = re.compile(rf'\b{re.escape(phrase)}\b', re.IGNORECASE)
+        line = pattern.sub(replacement, line)
+    return line
+
 def borgify_word(word):
-    """
-    Transform a single word to Borg style if it matches our maps.
-    Handles punctuation and common contractions.
-    """
-    # Match and separate trailing punctuation
-    match = re.match(r"^([\w'\-]+)([.,!?;:'\"`]*)$", word)
+    # Separate word from trailing punctuation (handles most symbols)
+    match = re.match(r"^([A-Za-z0-9'’\-]+)([^\w']*)$", word)
     if match:
         w, punct = match.groups()
     else:
         w, punct = word, ""
-    # Handle all forms of "I" and contractions
-    if w.lower() in I_FORMS:
-        return preserve_case(I_FORMS[w.lower()], w) + punct
-    # Other pronouns
-    if w.lower() in PRONOUNS:
-        return preserve_case(PRONOUNS[w.lower()], w) + punct
-    # Borg nouns
-    if w.lower() in NOUNS:
-        return preserve_case(NOUNS[w.lower()], w) + punct
-    # Borg verbs
-    if w.lower() in VERBS:
-        return preserve_case(VERBS[w.lower()], w) + punct
-    # Monotone adjectives
-    if w.lower() in MONOTONE:
-        return preserve_case(MONOTONE[w.lower()], w) + punct
-    # No match: return word as is
+    wl = w.lower()
+    # Handle "I" and contractions robustly
+    if w in I_FORMS:
+        return preserve_case(I_FORMS[w], w) + punct
+    elif wl in I_FORMS:
+        return preserve_case(I_FORMS[wl], w) + punct
+    if wl in PRONOUNS:
+        return preserve_case(PRONOUNS[wl], w) + punct
+    if wl in NOUNS:
+        return preserve_case(NOUNS[wl], w) + punct
+    if wl in VERBS:
+        return preserve_case(VERBS[wl], w) + punct
+    if wl in MONOTONE:
+        return preserve_case(MONOTONE[wl], w) + punct
     return word
 
+def smart_split(line):
+    # Splits, keeping punctuation separate for transformation
+    # Handles Unicode and ASCII
+    return re.findall(r"[A-Za-z0-9'’\-]+|[^\w\s]", line)
+
 def borgify_line(line):
-    """
-    Assimilate a full line:
-    - Apply Borg transformation to each word
-    - Maybe append a Borg phrase (random chance)
-    """
     line = line.replace("’", "'")  # Normalize apostrophes
-    words = line.split() # Split into words
-    borged = [borgify_word(w) for w in words] # Borgify each word
-    result = ' '.join(borged) # Join back into a line
-    # Randomly append a Borg phrase (for dramatic effect    )
-    if result and random.random() < BORG_PHRASE_CHANCE:
-        result += " " + random.choice(BORG_PHRASES)
-    return result
+    line = pre_borgify(line)       # Phrasal verb prepass
+    sentences = re.split(r'([.!?])', line)
+    output = []
+    for i in range(0, len(sentences)-1, 2):
+        sentence = sentences[i].strip()
+        punct = sentences[i+1]
+        if not sentence:
+            continue
+        words = smart_split(sentence)
+        borged = [borgify_word(w) for w in words]
+        borgified = ' '.join(borged) + punct
+        if random.random() < BORG_PHRASE_CHANCE:
+            borgified += " < " + random.choice(BORG_PHRASES) + " >"
+        output.append(borgified)
+    # Handle trailing fragment if present
+    if len(sentences) % 2 == 1 and sentences[-1].strip():
+        output.append(' '.join([borgify_word(w) for w in smart_split(sentences[-1].strip())]))
+    return ' '.join(output)
 
 #==========================================
 # === CLI Entrypoint and Input Handling ===
 #==========================================
 
 def main():
-    """
-    Command-line interface.
-    - Accepts input as arguments, from file, via pipe, or interactively
-    - Prints Borgified output
-    """
-    parser = argparse.ArgumentParser(description="Assimilate your text. Resistance is futile.")
-    parser.add_argument("text", nargs="*", help="Text to borgify")
-    parser.add_argument("--file", "-f", help="Borgify a file")
+    parser = argparse.ArgumentParser(description="Assimilate your text. < RESISTANCE IS FUTILE >")
+    parser.add_argument("input", nargs="*", help="Text or filename to assimilate")
     args = parser.parse_args()
 
-    # File input: borgify each line of a file
-    if args.file:
-        with open(args.file, "r", encoding="utf-8") as f:
-            for line in f:
+    # 1. If piped input, assimilate that (skipping attribution lines)
+    if not sys.stdin.isatty():
+        for line in sys.stdin:
+            if line.strip().startswith("-- "):
+                print(line.rstrip())
+            else:
                 print(borgify_line(line.rstrip()))
         return
 
-    # Arg input: borgify the provided command-line text
-    if args.text:
-        print(borgify_line(' '.join(args.text)))
+    # 2. If one arg and it's a readable file, assimilate file (skipping attribution lines)
+    if len(args.input) == 1:
+        try:
+            with open(args.input[0], "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("-- "):
+                        print(line.rstrip())
+                    else:
+                        print(borgify_line(line.rstrip()))
+            return
+        except FileNotFoundError:
+            pass  # Not a file, treat as text
+
+    # 3. If any args, treat as literal text
+    if args.input:
+        print(borgify_line(' '.join(args.input)))
         return
 
-    # Piped STDIN input (not a TTY): borgify each line
-    if not sys.stdin.isatty():
-        for line in sys.stdin:
-            print(borgify_line(line.rstrip()))
-        return
-
-    # Interactive session: user types in lines, script assimilates each one
-    print("borgify.py 0️⃣1️⃣  — Resistance is futile. Type a line to assimilate. Ctrl-D to quit.")
+    # 4. Otherwise, go interactive
+    print("borgify.py 0️⃣1️⃣  — < RESISTANCE IS FUTILE > Type a line to assimilate. Ctrl-D to quit.")
     try:
-        for line in sys.stdin:
-            print(borgify_line(line.rstrip()))
-    except KeyboardInterrupt:
-        print("\nYou will be assimilated.")
+        while True:
+            inp = input("> ")
+            print(borgify_line(inp))
+    except (EOFError, KeyboardInterrupt):
+        print("\n< YOU WILL BE ASSIMILATED >")
 
 #==========================
 # === Script Entrypoint ===
