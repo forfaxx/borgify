@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-borgify.py 0️⃣1️⃣  — Assimilate your text into Borg-style language.
+borgify.py 0️⃣1️⃣  — Assimilate your text...
 
 Transforms ordinary sentences into Borg-speak: collective pronouns, Borg-ified nouns,
 action verbs, and signature phrases. Inspired by the vocabulary of Star Trek’s most
